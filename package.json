@@ -1,0 +1,18 @@
+{
+  "name": "asistente-whatsapp-barberia",
+  "version": "1.0.0",
+  "description": "Asistente de WhatsApp para barberia con precios y agenda de citas",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "localtunnel": "^2.0.2"
+  }
+}
