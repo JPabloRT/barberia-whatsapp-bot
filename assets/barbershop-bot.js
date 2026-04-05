@@ -23,10 +23,20 @@ function getConfig(overrides = {}) {
 
 function getSession(phone) {
   if (!sessions.has(phone)) {
-    sessions.set(phone, { step: "menu", selectedDate: null });
+    sessions.set(phone, {
+      step: "menu",
+      selectedDate: null,
+      customerName: null
+    });
   }
 
   return sessions.get(phone);
+}
+
+function resetSession(session) {
+  session.step = "menu";
+  session.selectedDate = null;
+  session.customerName = null;
 }
 
 function formatHour(hour) {
@@ -48,13 +58,13 @@ function formatBusinessHours() {
 function formatMenu(config) {
   return [
     `Hola, bienvenido a ${config.businessName}.`,
-    `Atendemos citas de 1 hora de ${formatBusinessHours()}.`,
-    "Puedo ayudarte con estas opciones:",
+    `Trabajamos con citas de 1 hora de ${formatBusinessHours()}.`,
+    "Te puedo ayudar con lo siguiente:",
     "1. Agendar cita",
     "2. Ver citas de hoy",
     "3. Ver citas de manana",
     "",
-    "Tambien puedes escribir: agendar, citas de hoy o citas de manana."
+    "Tambien puedes escribir: agendar, citas de hoy, citas de manana, cancelar o reiniciar."
   ].join("\n");
 }
 
@@ -144,12 +154,12 @@ function formatDateOptions(timezone) {
 async function formatSlotOptions(dateString, storage) {
   const slots = await getAvailableSlots(dateString, storage);
   if (!slots.length) {
-    return "Ese dia ya no tiene horarios disponibles. Escribe 1 para elegir otra fecha.";
+    return "Ese dia ya no tiene horarios disponibles. Escribe 1 para elegir otra fecha o escribe cancelar.";
   }
 
   const lines = slots.map((slot, index) => `${index + 1}. ${slot}`);
   return [
-    `Horarios disponibles para ${formatDateLabel(dateString)}:`,
+    `Estos son los horarios disponibles para ${formatDateLabel(dateString)}:`,
     ...lines,
     "",
     "Escribe el numero del horario que deseas reservar."
@@ -162,9 +172,10 @@ async function formatBookingsForDate(dateString, label, storage) {
     return `No hay citas agendadas para ${label}.`;
   }
 
-  const lines = dayBookings.map(
-    (booking, index) => `${index + 1}. ${booking.time} - ${booking.phone}`
-  );
+  const lines = dayBookings.map((booking, index) => {
+    const namePart = booking.customerName ? ` - ${booking.customerName}` : "";
+    return `${index + 1}. ${booking.time}${namePart} - ${booking.phone}`;
+  });
 
   return [`Citas agendadas para ${label}:`, ...lines].join("\n");
 }
@@ -178,6 +189,7 @@ async function bookAppointment(phone, session, slotIndex, storage) {
 
   const appointment = {
     phone,
+    customerName: session.customerName,
     date: session.selectedDate,
     time: chosenSlot,
     durationMinutes: APPOINTMENT_DURATION_MINUTES
@@ -191,9 +203,7 @@ async function bookAppointment(phone, session, slotIndex, storage) {
     memoryBookings.push(appointment);
   }
 
-  session.step = "menu";
-  session.selectedDate = null;
-
+  resetSession(session);
   return savedAppointment;
 }
 
@@ -215,39 +225,71 @@ function isScheduleRequest(text) {
   return text === "1" || text.includes("agendar") || text.includes("cita");
 }
 
+function isResetRequest(text) {
+  return ["hola", "buenas", "menu", "inicio", "empezar", "reiniciar", "cancelar", "volver"].includes(text);
+}
+
+function isValidName(text) {
+  return text.length >= 2 && text.length <= 80 && /[a-z]/i.test(text);
+}
+
 async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
   const config = getConfig(overrides);
   const text = normalizeText(rawText);
   const session = getSession(phone);
 
-  if (!text || ["hola", "buenas", "menu", "inicio", "empezar", "reiniciar", "cancelar"].includes(text)) {
-    session.step = "menu";
-    session.selectedDate = null;
+  if (!text || ["hola", "buenas", "menu", "inicio", "empezar"].includes(text)) {
+    resetSession(session);
     return formatMenu(config);
   }
 
+  if (["cancelar", "reiniciar", "volver"].includes(text)) {
+    resetSession(session);
+    return [
+      "Listo, reinicie la conversacion.",
+      "",
+      formatMenu(config)
+    ].join("\n");
+  }
+
   if (isTodayRequest(text)) {
+    resetSession(session);
     return formatBookingsForDate(todayInTimezone(config.timezone), "hoy", storage);
   }
 
   if (isTomorrowRequest(text)) {
+    resetSession(session);
     return formatBookingsForDate(addDays(todayInTimezone(config.timezone), 1), "manana", storage);
   }
 
   if (session.step === "menu") {
     if (isScheduleRequest(text)) {
-      session.step = "awaiting_date";
-      return formatDateOptions(config.timezone);
+      session.step = "awaiting_name";
+      return "Claro. Antes de agendar, comparteme tu nombre por favor.";
     }
 
     return formatMenu(config);
+  }
+
+  if (session.step === "awaiting_name") {
+    if (!isValidName(text)) {
+      return "No pude identificar bien tu nombre. Escribelo otra vez por favor, o escribe cancelar.";
+    }
+
+    session.customerName = rawText.trim();
+    session.step = "awaiting_date";
+    return [
+      `Perfecto, ${session.customerName}.`,
+      "",
+      formatDateOptions(config.timezone)
+    ].join("\n");
   }
 
   if (session.step === "awaiting_date") {
     const dates = getNextAvailableDates(config.timezone);
     const selectedDate = dates[Number(text) - 1];
     if (!selectedDate) {
-      return "No reconoci ese dia. Escribe el numero de una fecha disponible.";
+      return "No reconoci ese dia. Escribe el numero de una fecha disponible o escribe cancelar.";
     }
 
     session.selectedDate = selectedDate;
@@ -261,16 +303,16 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
     try {
       const appointment = await bookAppointment(phone, session, slotIndex, storage);
       if (!appointment) {
-        return "No reconoci ese horario. Escribe el numero de uno de los horarios disponibles.";
+        return "No reconoci ese horario. Escribe el numero de uno de los horarios disponibles o escribe cancelar.";
       }
 
       return [
-        "Tu cita ha sido agendada con exito.",
+        `Listo, ${appointment.customerName || "tu cita"} ya quedo agendada.`,
         `Fecha: ${formatDateLabel(appointment.date)} (${appointment.date})`,
         `Hora: ${appointment.time}`,
         `Duracion: ${appointment.durationMinutes} minutos`,
         "",
-        "Si deseas volver al menu, escribe hola."
+        "Si necesitas otra cosa, escribe hola."
       ].join("\n");
     } catch (error) {
       if (error.code === "23505") {
@@ -281,8 +323,7 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
     }
   }
 
-  session.step = "menu";
-  session.selectedDate = null;
+  resetSession(session);
   return formatMenu(config);
 }
 

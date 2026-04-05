@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS appointments (
   id BIGSERIAL PRIMARY KEY,
   phone VARCHAR(32) NOT NULL,
+  customer_name VARCHAR(120),
   appointment_date DATE NOT NULL,
   appointment_time VARCHAR(5) NOT NULL,
   duration_minutes INTEGER NOT NULL DEFAULT 60,
