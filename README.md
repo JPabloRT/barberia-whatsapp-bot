@@ -7,10 +7,12 @@ Este proyecto esta preparado para usar `Meta WhatsApp Cloud API` con un servidor
 Cuando el cliente escribe `hola`, el asistente:
 
 1. saluda y da la bienvenida
-2. ofrece agendar cita
-3. permite consultar citas de hoy o de manana
-4. muestra fechas y horarios disponibles
+2. pide el nombre del cliente cuando quiere agendar
+3. muestra solo fechas y horarios disponibles al publico
+4. permite cancelar la propia cita del cliente
 5. confirma la cita
+
+Los clientes no pueden ver la agenda completa de la barberia. Si un horario ya fue ocupado, simplemente deja de aparecer como disponible.
 
 ## Estructura del proyecto
 
@@ -34,6 +36,7 @@ Crea un archivo `.env` tomando como base `.env.example`:
 PORT=3000
 BUSINESS_NAME=Barberia Central
 TIMEZONE=America/Mexico_City
+ADMIN_SECRET=tu_clave_secreta_admin
 META_VERIFY_TOKEN=barberia_verify_token
 WHATSAPP_ACCESS_TOKEN=tu_access_token_de_meta
 WHATSAPP_PHONE_NUMBER_ID=tu_phone_number_id
@@ -80,6 +83,7 @@ El servidor crea la tabla automaticamente al arrancar. Si prefieres crearla manu
 CREATE TABLE IF NOT EXISTS appointments (
   id BIGSERIAL PRIMARY KEY,
   phone VARCHAR(32) NOT NULL,
+  customer_name VARCHAR(120),
   appointment_date DATE NOT NULL,
   appointment_time VARCHAR(5) NOT NULL,
   duration_minutes INTEGER NOT NULL DEFAULT 60,
@@ -97,6 +101,7 @@ CREATE TABLE IF NOT EXISTS appointments (
 
 - `BUSINESS_NAME`
 - `TIMEZONE`
+- `ADMIN_SECRET`
 - `META_VERIFY_TOKEN`
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_PHONE_NUMBER_ID`
@@ -135,8 +140,19 @@ Para una barberia real, el siguiente paso correcto es guardar la informacion en 
 
 - `hola`
 - `agendar`
-- `citas de hoy`
-- `citas de manana`
+- `cancelar cita`
+- `reiniciar`
+- `volver`
+
+## Comandos secretos de admin
+
+Configura `ADMIN_SECRET` y luego usa estos mensajes exactos desde tu WhatsApp:
+
+- `admin hoy TU_CLAVE`
+- `admin manana TU_CLAVE`
+- `admin semana TU_CLAVE`
+
+Asi solo el admin puede ver las citas del dia, de manana o de la semana.
 
 ## Recomendacion realista
 

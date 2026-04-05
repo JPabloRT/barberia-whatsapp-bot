@@ -77,6 +77,58 @@ async function getAppointmentsForDate(dateString) {
   }));
 }
 
+async function getAppointmentsByPhone(phone) {
+  const activePool = getPool();
+  if (!activePool) {
+    return [];
+  }
+
+  const result = await activePool.query(
+    `
+      SELECT id, phone, appointment_date, appointment_time, duration_minutes, customer_name
+      FROM appointments
+      WHERE phone = $1
+      ORDER BY appointment_date ASC, appointment_time ASC
+    `,
+    [phone]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    phone: row.phone,
+    customerName: row.customer_name,
+    date: row.appointment_date.toISOString().slice(0, 10),
+    time: row.appointment_time,
+    durationMinutes: row.duration_minutes
+  }));
+}
+
+async function getAppointmentsInRange(startDate, endDate) {
+  const activePool = getPool();
+  if (!activePool) {
+    return [];
+  }
+
+  const result = await activePool.query(
+    `
+      SELECT id, phone, appointment_date, appointment_time, duration_minutes, customer_name
+      FROM appointments
+      WHERE appointment_date BETWEEN $1 AND $2
+      ORDER BY appointment_date ASC, appointment_time ASC
+    `,
+    [startDate, endDate]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    phone: row.phone,
+    customerName: row.customer_name,
+    date: row.appointment_date.toISOString().slice(0, 10),
+    time: row.appointment_time,
+    durationMinutes: row.duration_minutes
+  }));
+}
+
 async function createAppointment(appointment) {
   const activePool = getPool();
   if (!activePool) {
@@ -108,8 +160,41 @@ async function createAppointment(appointment) {
   };
 }
 
+async function deleteAppointmentById(id, phone) {
+  const activePool = getPool();
+  if (!activePool) {
+    return null;
+  }
+
+  const result = await activePool.query(
+    `
+      DELETE FROM appointments
+      WHERE id = $1 AND phone = $2
+      RETURNING id, phone, customer_name, appointment_date, appointment_time, duration_minutes
+    `,
+    [id, phone]
+  );
+
+  if (!result.rows.length) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    phone: row.phone,
+    customerName: row.customer_name,
+    date: row.appointment_date.toISOString().slice(0, 10),
+    time: row.appointment_time,
+    durationMinutes: row.duration_minutes
+  };
+}
+
 module.exports = {
   createAppointment,
+  deleteAppointmentById,
+  getAppointmentsByPhone,
+  getAppointmentsInRange,
   getAppointmentsForDate,
   initDatabase
 };

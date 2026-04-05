@@ -18,6 +18,9 @@ const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || "v22.0";
 const storage = {
   createAppointment: db.createAppointment,
+  deleteAppointmentById: db.deleteAppointmentById,
+  getAppointmentsByPhone: db.getAppointmentsByPhone,
+  getAppointmentsInRange: db.getAppointmentsInRange,
   getAppointmentsForDate: db.getAppointmentsForDate
 };
 

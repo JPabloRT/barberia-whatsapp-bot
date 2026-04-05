@@ -16,6 +16,7 @@ function normalizeText(text) {
 
 function getConfig(overrides = {}) {
   return {
+    adminSecret: overrides.adminSecret || process.env.ADMIN_SECRET || "",
     businessName: overrides.businessName || process.env.BUSINESS_NAME || "Barberia Central",
     timezone: overrides.timezone || process.env.TIMEZONE || "America/Mexico_City"
   };
@@ -26,7 +27,8 @@ function getSession(phone) {
     sessions.set(phone, {
       step: "menu",
       selectedDate: null,
-      customerName: null
+      customerName: null,
+      cancellableAppointments: []
     });
   }
 
@@ -37,6 +39,7 @@ function resetSession(session) {
   session.step = "menu";
   session.selectedDate = null;
   session.customerName = null;
+  session.cancellableAppointments = [];
 }
 
 function formatHour(hour) {
@@ -58,13 +61,15 @@ function formatBusinessHours() {
 function formatMenu(config) {
   return [
     `Hola, bienvenido a ${config.businessName}.`,
-    `Trabajamos con citas de 1 hora de ${formatBusinessHours()}.`,
-    "Te puedo ayudar con lo siguiente:",
-    "1. Agendar cita",
-    "2. Ver citas de hoy",
-    "3. Ver citas de manana",
+    `Nuestro horario es de ${formatBusinessHours()} y cada cita dura 1 hora.`,
+    "Con gusto te ayudo a agendar o cancelar una cita.",
     "",
-    "Tambien puedes escribir: agendar, citas de hoy, citas de manana, cancelar o reiniciar."
+    "Opciones disponibles:",
+    "1. Agendar cita",
+    "2. Cancelar mi cita",
+    "",
+    "Si agendaste un horario, ese espacio deja de mostrarse como disponible para otros clientes.",
+    "Tambien puedes escribir: agendar, cancelar cita, hola, volver o reiniciar."
   ].join("\n");
 }
 
@@ -131,6 +136,26 @@ async function getBookingsForDate(dateString, storage) {
     .sort((a, b) => a.time.localeCompare(b.time));
 }
 
+async function getAppointmentsByPhone(phone, storage) {
+  if (storage?.getAppointmentsByPhone) {
+    return storage.getAppointmentsByPhone(phone);
+  }
+
+  return memoryBookings
+    .filter((booking) => booking.phone === phone)
+    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+}
+
+async function getAppointmentsInRange(startDate, endDate, storage) {
+  if (storage?.getAppointmentsInRange) {
+    return storage.getAppointmentsInRange(startDate, endDate);
+  }
+
+  return memoryBookings
+    .filter((booking) => booking.date >= startDate && booking.date <= endDate)
+    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+}
+
 async function getAvailableSlots(dateString, storage) {
   const baseSlots = isBusinessDay(dateString) ? getDailySlots() : [];
   const dayBookings = await getBookingsForDate(dateString, storage);
@@ -141,7 +166,7 @@ async function getAvailableSlots(dateString, storage) {
 
 function formatDateOptions(timezone) {
   const dates = getNextAvailableDates(timezone);
-  const lines = dates.map((date, index) => `${index + 1}. ${formatDateLabel(date)} (${date})`);
+  const lines = dates.map((date, index) => `${index + 1}. ${formatDateLabel(date)}.`);
 
   return [
     "Estos son los proximos dias disponibles:",
@@ -154,7 +179,7 @@ function formatDateOptions(timezone) {
 async function formatSlotOptions(dateString, storage) {
   const slots = await getAvailableSlots(dateString, storage);
   if (!slots.length) {
-    return "Ese dia ya no tiene horarios disponibles. Escribe 1 para elegir otra fecha o escribe cancelar.";
+    return "Ese dia ya no tiene horarios disponibles. Escribe 1 para elegir otra fecha o escribe volver.";
   }
 
   const lines = slots.map((slot, index) => `${index + 1}. ${slot}`);
@@ -166,18 +191,58 @@ async function formatSlotOptions(dateString, storage) {
   ].join("\n");
 }
 
-async function formatBookingsForDate(dateString, label, storage) {
-  const dayBookings = await getBookingsForDate(dateString, storage);
-  if (!dayBookings.length) {
+function formatAdminBookings(label, bookings) {
+  if (!bookings.length) {
     return `No hay citas agendadas para ${label}.`;
   }
 
-  const lines = dayBookings.map((booking, index) => {
-    const namePart = booking.customerName ? ` - ${booking.customerName}` : "";
-    return `${index + 1}. ${booking.time}${namePart} - ${booking.phone}`;
+  const lines = bookings.map((booking, index) => {
+    const datePart = booking.date ? `${formatDateLabel(booking.date)} - ` : "";
+    const namePart = booking.customerName ? `${booking.customerName} - ` : "";
+    return `${index + 1}. ${datePart}${booking.time} - ${namePart}${booking.phone}`;
   });
 
   return [`Citas agendadas para ${label}:`, ...lines].join("\n");
+}
+
+function formatAdminWeek(bookings) {
+  if (!bookings.length) {
+    return "No hay citas agendadas para los proximos 7 dias.";
+  }
+
+  const lines = bookings.map((booking, index) => {
+    const namePart = booking.customerName ? `${booking.customerName} - ` : "";
+    return `${index + 1}. ${formatDateLabel(booking.date)} - ${booking.time} - ${namePart}${booking.phone}`;
+  });
+
+  return ["Citas agendadas para la semana:", ...lines].join("\n");
+}
+
+async function formatCancellationOptions(phone, timezone, storage) {
+  const today = todayInTimezone(timezone);
+  const bookings = await getAppointmentsByPhone(phone, storage);
+  const upcoming = bookings.filter((booking) => booking.date >= today);
+
+  if (!upcoming.length) {
+    return {
+      appointments: [],
+      message: "No encontre citas futuras para este numero. Si quieres agendar una nueva, escribe hola."
+    };
+  }
+
+  const lines = upcoming.map(
+    (booking, index) => `${index + 1}. ${formatDateLabel(booking.date)} - ${booking.time}`
+  );
+
+  return {
+    appointments: upcoming,
+    message: [
+      "Estas son tus citas futuras:",
+      ...lines,
+      "",
+      "Escribe el numero de la cita que deseas cancelar."
+    ].join("\n")
+  };
 }
 
 async function bookAppointment(phone, session, slotIndex, storage) {
@@ -207,26 +272,56 @@ async function bookAppointment(phone, session, slotIndex, storage) {
   return savedAppointment;
 }
 
+async function deleteAppointment(appointment, phone, storage) {
+  if (storage?.deleteAppointmentById && appointment.id) {
+    return storage.deleteAppointmentById(appointment.id, phone);
+  }
+
+  const index = memoryBookings.findIndex(
+    (booking) => booking.phone === phone && booking.date === appointment.date && booking.time === appointment.time
+  );
+
+  if (index === -1) {
+    return null;
+  }
+
+  return memoryBookings.splice(index, 1)[0];
+}
+
 function isTodayRequest(text) {
-  return text === "2" || text.includes("citas de hoy") || text === "hoy";
+  return text.includes("citas de hoy") || text === "hoy";
 }
 
 function isTomorrowRequest(text) {
-  return (
-    text === "3" ||
-    text.includes("citas de manana") ||
-    text.includes("citas de mañana") ||
-    text === "manana" ||
-    text === "mañana"
-  );
+  return text.includes("citas de manana") || text === "manana";
 }
 
 function isScheduleRequest(text) {
-  return text === "1" || text.includes("agendar") || text.includes("cita");
+  return text === "1" || text.includes("agendar");
 }
 
-function isResetRequest(text) {
-  return ["hola", "buenas", "menu", "inicio", "empezar", "reiniciar", "cancelar", "volver"].includes(text);
+function isCancellationRequest(text) {
+  return text === "2" || text.includes("cancelar cita");
+}
+
+function parseAdminRequest(text, adminSecret) {
+  if (!adminSecret) {
+    return null;
+  }
+
+  if (text === `admin hoy ${adminSecret}`) {
+    return "today";
+  }
+
+  if (text === `admin manana ${adminSecret}`) {
+    return "tomorrow";
+  }
+
+  if (text === `admin semana ${adminSecret}`) {
+    return "week";
+  }
+
+  return null;
 }
 
 function isValidName(text) {
@@ -237,29 +332,45 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
   const config = getConfig(overrides);
   const text = normalizeText(rawText);
   const session = getSession(phone);
+  const adminRequest = parseAdminRequest(text, normalizeText(config.adminSecret));
 
   if (!text || ["hola", "buenas", "menu", "inicio", "empezar"].includes(text)) {
     resetSession(session);
     return formatMenu(config);
   }
 
-  if (["cancelar", "reiniciar", "volver"].includes(text)) {
+  if (["reiniciar", "volver"].includes(text)) {
     resetSession(session);
     return [
-      "Listo, reinicie la conversacion.",
+      "Listo, volvi al inicio.",
       "",
       formatMenu(config)
     ].join("\n");
   }
 
-  if (isTodayRequest(text)) {
+  if (adminRequest === "today") {
     resetSession(session);
-    return formatBookingsForDate(todayInTimezone(config.timezone), "hoy", storage);
+    return formatAdminBookings("hoy", await getBookingsForDate(todayInTimezone(config.timezone), storage));
   }
 
-  if (isTomorrowRequest(text)) {
+  if (adminRequest === "tomorrow") {
     resetSession(session);
-    return formatBookingsForDate(addDays(todayInTimezone(config.timezone), 1), "manana", storage);
+    return formatAdminBookings(
+      "manana",
+      await getBookingsForDate(addDays(todayInTimezone(config.timezone), 1), storage)
+    );
+  }
+
+  if (adminRequest === "week") {
+    const startDate = todayInTimezone(config.timezone);
+    const endDate = addDays(startDate, 6);
+    resetSession(session);
+    return formatAdminWeek(await getAppointmentsInRange(startDate, endDate, storage));
+  }
+
+  if (isTodayRequest(text) || isTomorrowRequest(text)) {
+    resetSession(session);
+    return "Esa opcion es solo para administracion.";
   }
 
   if (session.step === "menu") {
@@ -268,12 +379,41 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
       return "Claro. Antes de agendar, comparteme tu nombre por favor.";
     }
 
+    if (isCancellationRequest(text)) {
+      const result = await formatCancellationOptions(phone, config.timezone, storage);
+      session.cancellableAppointments = result.appointments;
+      session.step = result.appointments.length ? "awaiting_cancellation_choice" : "menu";
+      return result.message;
+    }
+
     return formatMenu(config);
+  }
+
+  if (session.step === "awaiting_cancellation_choice") {
+    const appointment = session.cancellableAppointments[Number(text) - 1];
+    if (!appointment) {
+      return "No reconoci esa cita. Escribe el numero de la cita que deseas cancelar o escribe volver.";
+    }
+
+    const deletedAppointment = await deleteAppointment(appointment, phone, storage);
+    resetSession(session);
+
+    if (!deletedAppointment) {
+      return "No pude cancelar esa cita porque ya no estaba disponible. Escribe hola para volver al inicio.";
+    }
+
+    return [
+      "Tu cita fue cancelada correctamente.",
+      `Fecha: ${formatDateLabel(deletedAppointment.date)}`,
+      `Hora: ${deletedAppointment.time}`,
+      "",
+      "Si deseas agendar otra, escribe hola."
+    ].join("\n");
   }
 
   if (session.step === "awaiting_name") {
     if (!isValidName(text)) {
-      return "No pude identificar bien tu nombre. Escribelo otra vez por favor, o escribe cancelar.";
+      return "No pude identificar bien tu nombre. Escribelo otra vez por favor, o escribe volver.";
     }
 
     session.customerName = rawText.trim();
@@ -289,7 +429,7 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
     const dates = getNextAvailableDates(config.timezone);
     const selectedDate = dates[Number(text) - 1];
     if (!selectedDate) {
-      return "No reconoci ese dia. Escribe el numero de una fecha disponible o escribe cancelar.";
+      return "No reconoci ese dia. Escribe el numero de una fecha disponible o escribe volver.";
     }
 
     session.selectedDate = selectedDate;
@@ -303,12 +443,12 @@ async function handleIncomingMessage(phone, rawText, overrides = {}, storage) {
     try {
       const appointment = await bookAppointment(phone, session, slotIndex, storage);
       if (!appointment) {
-        return "No reconoci ese horario. Escribe el numero de uno de los horarios disponibles o escribe cancelar.";
+        return "No reconoci ese horario. Escribe el numero de uno de los horarios disponibles o escribe volver.";
       }
 
       return [
         `Listo, ${appointment.customerName || "tu cita"} ya quedo agendada.`,
-        `Fecha: ${formatDateLabel(appointment.date)} (${appointment.date})`,
+        `Fecha: ${formatDateLabel(appointment.date)}`,
         `Hora: ${appointment.time}`,
         `Duracion: ${appointment.durationMinutes} minutos`,
         "",
